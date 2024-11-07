@@ -3,11 +3,17 @@ from flask import Flask, request
 from flask_restful import Resource, Api
 from flask_httpauth import HTTPBasicAuth
 from bd import add_news, get_news
+import PIL
+from senha import geminiapi
+import google.generativeai as genai
 
 app = Flask(__name__)
 api = Api(app)
 auth = HTTPBasicAuth()
 
+# configuração do gemini
+genai.configure(api_key=geminiapi)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 users = {
     "admin": {"password": "admin_pass", "role": "admin"},
@@ -35,41 +41,55 @@ def role_required(role):
 
 class News(Resource):
 
-    def post(self):
+    def post(self): # Post direto pelo site
 
         from datetime import datetime
 
         data = request.get_json()
 
-        if not data:
-            return {"message": "Nenhum dado foi enviado."}, 400
+        if len(data) == 1:
 
-        title = data.get('title', "").strip()
-        location = data.get('location', "").strip()
-        category = data.get('category', "").strip()
-        image = data.get('image')
-        description = data.get('description', "").strip()
+            print(data['info'])
+            response = model.generate_content(f"Analise a mensagem (analise se pode ser uma mensagem verdadeira ou não) e me fale o que o usuário quer, separe a mensagem em: titulo, categoria (você vai identificar), imagem (caso tenha imagem, veja se consegue identificar a origem da imagem) e descrição: \n{data['info']}. Retorne um json já tratado apenas do que foi pedido.")
+            #response = response.text.replace("```", '"""')
+            response = response.text.replace('json', '')
+            response = response.replace('\n', '')
+            print(response)
 
-        if not title or not location or not category:
-            return {"message": "Preencha todos os campos obrigatórios: título, localização e categoria."}, 400
+            return response
 
-        new = {
-            "title": title,
-            "location": location,
-            "category": category,
-            "image": image,
-            "description": description
-        }
-        today = datetime.today()
+        if len(data) >= 3:
 
-        new["date"] = today.strftime("%d/%m/%Y")
-        new["time"] = today.strftime("%H:%M")
+            if not data:
+                return {"message": "Nenhum dado foi enviado."}, 400
 
-        try:
-            add_news.add_news(new)
-            return {"message": "Noticia adicionada com sucesso."}, 200
-        except Exception as e:
-            return {"message": f"Erro ao adicionar notícia: {str(e)}"}, 500
+            title = data.get('title', "").strip()
+            location = data.get('location', "").strip()
+            category = data.get('category', "").strip()
+            image = data.get('image')
+            description = data.get('description', "").strip()
+
+            if not title or not location or not category:
+                return {"message": "Preencha todos os campos obrigatórios: título, localização e categoria."}, 400
+
+            new = {
+                "title": title,
+                "location": location,
+                "category": category,
+                "image": image,
+                "description": description
+            }
+            today = datetime.today()
+
+            new["date"] = today.strftime("%d/%m/%Y")
+            new["time"] = today.strftime("%H:%M")
+
+            try:
+                add_news.add_news(new)
+                return {"message": "Noticia adicionada com sucesso."}, 200
+            except Exception as e:
+                return {"message": f"Erro ao adicionar notícia: {str(e)}"}, 500
+
 
     def get(self):
 
