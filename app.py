@@ -2,7 +2,9 @@ import json
 from flask import Flask, request
 from flask_restful import Resource, Api
 from flask_httpauth import HTTPBasicAuth
-from bd import add_news, get_news
+from unicodedata import category
+
+from bd import add_news, get_news, delete_new
 import PIL
 from senha import geminiapi
 import google.generativeai as genai
@@ -16,27 +18,13 @@ genai.configure(api_key=geminiapi)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 users = {
-    "admin": {"password": "admin_pass", "role": "admin"},
-    "visitante": {"password": "visitante_pass", "role": "visitante"},
+    "admin": {"password": "admin"},
 }
 
 @auth.verify_password
 def verify_password(username, password):
-    if username in users and users[username]["password"] == password:
-        return username
-    return None
+    return username if username in users and users[username]["password"] == password else None
 
-
-def role_required(role):
-    def decorator(f):
-        def decorated_function(*args, **kwargs):
-            username = auth.current_user()
-            user_role = users.get(username, {}).get("role")
-            if user_role != role:
-                return {"message": "Acesso negado!"}, 403
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
 
 
 class News(Resource):
@@ -47,16 +35,57 @@ class News(Resource):
 
         data = request.get_json()
 
+        len_news = get_news.get_len_news().count_documents({})
+
         if len(data) == 1:
 
-            print(data['info'])
-            response = model.generate_content(f"Analise a mensagem (analise se pode ser uma mensagem verdadeira ou não) e me fale o que o usuário quer, separe a mensagem em: titulo, categoria (você vai identificar), imagem (caso tenha imagem, veja se consegue identificar a origem da imagem) e descrição: \n{data['info']}. Retorne um json já tratado apenas do que foi pedido.")
-            #response = response.text.replace("```", '"""')
-            response = response.text.replace('json', '')
-            response = response.replace('\n', '')
-            print(response)
+            chat = model.start_chat(history=[])
 
-            return response
+            analise = chat.send_message(f"Analise a mensagem se pode ser uma mensagem verdadeira ou não: \n{data['info']}. Retorne apenas 'Não.' ou 'Possivel Sim.'. Retorne 'Não.' em caso de mensagens de cunho sexual.")
+
+            print(analise.text)
+
+            if analise.text.strip() == 'Possivel Sim.':
+
+                motivo = chat.send_message(f"me fale o que o usuário quer informar na mensagem anterior, separe a mensagem em: titulo, localização, categoria (você vai identificar), imagem (caso tenha imagem, veja se consegue identificar a origem da imagem) e descrição. Retorne um json já tratado apenas do que foi pedido. {data['info']}")
+
+                print(motivo.text)
+
+                motivo = motivo.text
+                motivo = motivo.replace('json', '')
+                motivo = motivo.replace('```', '')
+                motivo = motivo.replace('\n', '')
+
+                informacao = json.loads(motivo)
+
+                new = {
+                    "id": len_news + 1,
+                    "title": informacao['titulo'],
+                    "location": informacao['localização'],
+                    "category": informacao['categoria'],
+                    "image": informacao['imagem'],
+                    "description": informacao['descrição']
+                }
+
+                today = datetime.today()
+
+                new["date"] = today.strftime("%d/%m/%Y")
+                new["time"] = today.strftime("%H:%M")
+
+                print(new)
+
+                try:
+                    add_news.add_news(new)
+                    return {"message": "Noticia adicionada com sucesso."}, 200
+                except Exception as e:
+                    return {"message": f"Erro ao adicionar notícia: {str(e)}"}, 500
+
+
+            if analise.text.strip() == 'Não.':
+
+                motivo = chat.send_message("Por que?")
+                return motivo.text
+
 
         if len(data) >= 3:
 
@@ -73,6 +102,7 @@ class News(Resource):
                 return {"message": "Preencha todos os campos obrigatórios: título, localização e categoria."}, 400
 
             new = {
+                "id": len_news + 1,
                 "title": title,
                 "location": location,
                 "category": category,
@@ -112,6 +142,7 @@ class News(Resource):
                 news = [new for new in news if new["date"].lower() == date.lower()]
 
             return [{
+                "id": new["id"],
                 "title": new["title"],
                 "location": new["location"],
                 "category": new["category"],
@@ -128,9 +159,21 @@ class News(Resource):
 
 class AdminNews(Resource):
     @auth.login_required
-    @role_required('admin')
     def get(self):
+
         return {"message": "Acesso autorizado para admin."}
+
+
+    @auth.login_required
+    def delete(self):
+
+        data = request.get_json()
+
+        deleted_new = delete_new.deleteNew(int(data['id']))
+
+        return {"message": "Noticia apagada com sucesso."}
+
+
 
 
 api.add_resource(News, '/news')
